@@ -234,10 +234,10 @@ class MidiRandomizer:
     """Configurable MIDI random-value generator for 7-bit parameters."""
 
     DISTRIBUTIONS = (
-        ("uniform", "Uniform"),
-        ("center", "Center-biased"),
-        ("edge", "Edge-biased"),
-        ("gaussian", "Gaussian"),
+        ("uniform", "UNIF."),
+        ("center", "CTR-BIAS"),
+        ("edge", "EDGE-BIAS"),
+        ("gaussian", "GAUSS."),
     )
 
     def __init__(
@@ -5715,6 +5715,7 @@ class DistributionSelector(QWidget):
             key for key, _label in MidiRandomizer.DISTRIBUTIONS
         )
         self._control_size = 82
+        self._compact_labels = True
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 0, 2, 0)
@@ -5805,11 +5806,33 @@ class DistributionSelector(QWidget):
 
         self.preview.set_distribution(distribution)
         self.state_label.setText(
-            MidiRandomizer.DISTRIBUTIONS[index][1]
+            self._distribution_label(distribution)
         )
 
         if emit and changed:
             self.valueChanged.emit(index)
+
+    @staticmethod
+    def _long_distribution_label(distribution):
+        return {
+            "uniform": "UNIFORM",
+            "center": "CENTER-BIASED",
+            "edge": "EDGE-BIASED",
+            "gaussian": "GAUSSIAN",
+        }.get(distribution, str(distribution).upper())
+
+    def _distribution_label(self, distribution):
+        if self._compact_labels:
+            return dict(MidiRandomizer.DISTRIBUTIONS).get(
+                distribution, str(distribution).upper()
+            )
+        return self._long_distribution_label(distribution)
+
+    def set_compact_labels(self, compact):
+        self._compact_labels = bool(compact)
+        self.state_label.setText(
+            self._distribution_label(self.preview.distribution)
+        )
 
     def previous(self):
         self._set_index(self._index() - 1)
@@ -6693,11 +6716,11 @@ class MidiRandomizeWindow(QMainWindow):
     def _update_compact_control_labels(self):
         compact = self.width() < 445
         captions = (
-            ("main_distribution_selector", "Dist" if compact else "Distribution"),
+            ("main_distribution_selector", "Dist." if compact else "Distribution"),
             ("main_bias_knob", "Bias"),
-            ("main_change_knob", "Max.Ch." if compact else "Max. Change"),
-            ("main_interval_knob", "Int.Shift" if compact else "Interval Shift"),
-            ("main_width_knob", "With" if compact else "Width"),
+            ("main_change_knob", "Max Chg." if compact else "Max. Change"),
+            ("main_interval_knob", "Int. Shift" if compact else "Interval Shift"),
+            ("main_width_knob", "Width"),
         )
         for attribute, caption in captions:
             control = getattr(self, attribute, None)
@@ -6706,6 +6729,7 @@ class MidiRandomizeWindow(QMainWindow):
             if attribute == "main_distribution_selector":
                 control._caption = caption
                 control.caption_label.setText(caption)
+                control.set_compact_labels(compact)
             else:
                 control.set_caption(caption)
 
