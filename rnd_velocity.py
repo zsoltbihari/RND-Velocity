@@ -479,26 +479,6 @@ class JackMidiBackend:
         self.midi_in = None
         self.midi_out = None
 
-        # MIDI is always passed through unchanged.
-        self.recommended_activity_filter = {
-            "Note On": True,
-            "Note Off": True,
-            "Control Change (CC)": True,
-            "Program Change": True,
-            "Aftertouch / Channel Pressure": True,
-            "Polyphonic Aftertouch": True,
-            "System Exclusive (SysEx)": True,
-            "MIDI Clock": False,
-            "Start": True,
-            "Continue": False,
-            "Stop": True,
-            "Active Sensing": False,
-            "System Reset": False,
-            "Time Code / MTC": False,
-        }
-        self.activity_filter = dict(
-            self.recommended_activity_filter
-        )
         self._activity_counts = [0] * CHANNEL_COUNT
 
     def start(self):
@@ -547,7 +527,7 @@ class JackMidiBackend:
         self.debug_event_logging = True
 
     def process(self, frames):
-        """Filter MIDI events, forward allowed events unchanged, and count them."""
+        """Forward MIDI events unchanged and count channel-voice activity."""
         if self.midi_in is None or self.midi_out is None:
             return
 
@@ -555,57 +535,11 @@ class JackMidiBackend:
 
         for offset, event in self.midi_in.incoming_midi_events():
             event_bytes = bytes(event)
-
-            # The Activity Filter controls only visual activity counters.
-            # MIDI forwarding itself is transparent: every event is passed
-            # through unchanged, regardless of the visual filter settings.
             self.midi_out.write_midi_event(offset, event_bytes)
 
-            category = self.classify_midi_event(event_bytes)
-            if (
-                category is not None
-                and self.activity_filter.get(category, False)
-                and 0x80 <= event_bytes[0] <= 0xEF
-            ):
+            if event_bytes and 0x80 <= event_bytes[0] <= 0xEF:
                 channel = event_bytes[0] & 0x0F
                 self._activity_counts[channel] += 1
-
-    def classify_midi_event(self, event):
-        data = bytes(event)
-        if not data:
-            return None
-
-        status = data[0]
-
-        if 0x80 <= status <= 0xEF:
-            return {
-                0x80: "Note Off",
-                0x90: "Note On",
-                0xA0: "Polyphonic Aftertouch",
-                0xB0: "Control Change (CC)",
-                0xC0: "Program Change",
-                0xD0: "Aftertouch / Channel Pressure",
-                }.get(status & 0xF0)
-
-        return {
-            0xF0: "System Exclusive (SysEx)",
-            0xF1: "Time Code / MTC",
-            0xF2: "Time Code / MTC",
-            0xF3: "Time Code / MTC",
-            0xF8: "MIDI Clock",
-            0xFA: "Start",
-            0xFB: "Continue",
-            0xFC: "Stop",
-            0xFE: "Active Sensing",
-            0xFF: "System Reset",
-        }.get(status)
-
-    def filter_allows_event(self, event):
-        category = self.classify_midi_event(event)
-        return (
-            category is not None
-            and self.activity_filter.get(category, False)
-        )
 
     def take_channel_activity(self):
         counts = self._activity_counts[:]
@@ -817,15 +751,9 @@ class RndVelocityBackend(JackMidiBackend):
             if not event_bytes:
                 continue
 
-            # Visual activity filtering must never block MIDI forwarding
-            # or prevent velocity randomization.
+            # MIDI activity is counted without a message-type filter.
             status = event_bytes[0]
             channel = status & 0x0F
-            category = self.classify_midi_event(event_bytes)
-            show_activity = (
-                category is not None
-                and self.activity_filter.get(category, False)
-            )
 
             if (
                 self.randomization_enabled
@@ -864,14 +792,13 @@ class RndVelocityBackend(JackMidiBackend):
                     f"Range: {minimum}–{maximum}"
                 )
 
-                if show_activity:
-                    self._activity_counts[channel] += 1
+                self._activity_counts[channel] += 1
                 continue
 
             # All non-randomized MIDI events pass through unchanged.
             self.midi_out.write_midi_event(offset, event_bytes)
 
-            if show_activity and 0x80 <= status <= 0xEF:
+            if 0x80 <= status <= 0xEF:
                 self._activity_counts[channel] += 1
 
 
@@ -1467,199 +1394,6 @@ class WindowSizePage(QWidget):
 
     def resizable(self):
         return self.resize_checkbox.isChecked()
-
-
-class MidiFilterPage(QWidget):
-    """MIDI message activity filter settings page."""
-
-    TOOLTIP_TEXTS = {
-        "Note On": "Allows MIDI Note On messages to pass through the filter.",
-        "Note Off": "Allows MIDI Note Off messages to pass through the filter.",
-        "Control Change (CC)": "Allows MIDI Control Change (CC) messages to pass through the filter.",
-        "Program Change": "Allows MIDI Program Change messages to pass through the filter.",
-        "Aftertouch / Channel Pressure": "Allows Channel Pressure (Aftertouch) messages to pass through the filter.",
-        "Polyphonic Aftertouch": "Allows Polyphonic Aftertouch messages to pass through the filter.",
-        "System Exclusive (SysEx)": "Allows System Exclusive (SysEx) messages to pass through the filter.",
-        "MIDI Clock": (
-            "Triggers the indicator for MIDI Clock timing messages. "
-            "Disabled by default because Clock can arrive continuously."
-        ),
-        "Start": "Allows MIDI Start messages to pass through the filter.",
-        "Continue": "Allows MIDI Continue messages to pass through the filter.",
-        "Stop": "Allows MIDI Stop messages to pass through the filter.",
-        "Active Sensing": (
-            "Triggers the indicator for MIDI Active Sensing messages. "
-            "Disabled by default because these may arrive continuously."
-        ),
-        "System Reset": "Allows MIDI System Reset messages to pass through the filter.",
-        "Time Code / MTC": "Allows MIDI Time Code / MTC System Common messages to pass through the filter.",
-    }
-
-    def __init__(self, backend, parent=None):
-        super().__init__(parent)
-        self.backend = backend
-        self.checks = {}
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(7)
-
-        title = QLabel("MIDI Filter")
-        title.setStyleSheet(
-            "font-size: 18px; font-weight: bold;"
-        )
-
-        description = QLabel(
-            "Choose which MIDI message types trigger the visual activity "
-            "indicator. This setting never blocks MIDI data: all messages "
-            "are forwarded, and Note On velocity randomization remains active."
-        )
-        description.setWordWrap(True)
-        description.setStyleSheet(
-            "color: #000000; font-size: 12px;"
-        )
-
-        layout.addWidget(title)
-        layout.addWidget(description)
-        layout.addSpacing(5)
-
-        # Only the approved message types are presented in Preferences.
-        # Legacy system-message entries are hidden from this page.
-        columns = QHBoxLayout()
-        columns.setContentsMargins(0, 0, 0, 0)
-        columns.setSpacing(24)
-
-        left_column = QVBoxLayout()
-        left_column.setContentsMargins(0, 0, 0, 0)
-        left_column.setSpacing(7)
-
-        right_column = QVBoxLayout()
-        right_column.setContentsMargins(0, 0, 0, 0)
-        right_column.setSpacing(7)
-
-        categories = [
-            "Note On",
-            "Note Off",
-            "Control Change (CC)",
-            "Program Change",
-            "Aftertouch / Channel Pressure",
-            "Polyphonic Aftertouch",
-            "MIDI Clock",
-        ]
-        split_index = 4
-
-        for column, column_categories in (
-            (left_column, categories[:split_index]),
-            (right_column, categories[split_index:]),
-        ):
-            for category in column_categories:
-                check = QCheckBox(category)
-                check.setChecked(
-                    self.backend.activity_filter[category]
-                )
-                # QCheckBox tooltip covers both the box and its label.
-                check.setToolTip(
-                    self.TOOLTIP_TEXTS.get(
-                        category,
-                        "Controls whether this MIDI message type is allowed through the MIDI filter.",
-                    )
-                )
-                check.toggled.connect(
-                    lambda checked, name=category:
-                    self.set_filter_value(name, checked)
-                )
-                column.addWidget(check)
-                self.checks[category] = check
-
-            column.addStretch()
-
-        columns.addLayout(left_column)
-        columns.addLayout(right_column)
-        layout.addLayout(columns)
-
-        quick_actions = QHBoxLayout()
-        select_all = QPushButton("Select All")
-        clear_all = QPushButton("Clear All")
-        reset_recommended = QPushButton("Reset to Recommended")
-
-        select_all.setToolTip(
-            "Enable all MIDI message types for activity indication."
-        )
-        clear_all.setToolTip(
-            "Disable all MIDI message types for activity indication."
-        )
-        reset_recommended.setToolTip(
-            "Restore the recommended Activity Filter settings."
-        )
-
-        select_all.clicked.connect(
-            lambda: [
-                check.setChecked(True)
-                for check in self.checks.values()
-            ]
-        )
-        clear_all.clicked.connect(
-            lambda: [
-                check.setChecked(False)
-                for check in self.checks.values()
-            ]
-        )
-        reset_recommended.clicked.connect(
-            self.reset_recommended
-        )
-
-        quick_actions.addWidget(select_all)
-        quick_actions.addWidget(clear_all)
-        quick_actions.addWidget(reset_recommended)
-        quick_actions.addStretch()
-        help_button = QPushButton("?")
-        help_button.setMaximumWidth(28)
-        help_button.clicked.connect(self.show_local_help)
-        help_button.setToolTip("Local help")
-        quick_actions.addWidget(help_button)
-        layout.addLayout(quick_actions)
-        layout.addStretch()
-
-    def show_local_help(self):
-        QMessageBox.information(
-            self,
-            "MIDI Filter Help",
-            "MIDI Filter\n\n"
-            "Select which MIDI message types trigger the visual activity "
-            "indicator. This filter does not block or modify MIDI messages. "
-            "All MIDI data is forwarded, and Note On velocity randomization "
-            "continues to work regardless of these settings.\n\n"
-            "Reset to Recommended restores the recommended indicator settings."
-        )
-
-    def reset_recommended(self):
-        answer = QMessageBox.question(
-            self,
-            "Reset to Recommended",
-            "Reset all MIDI Filter settings to the recommended values?",
-            QMessageBox.StandardButton.Yes
-            | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-
-        for category, check in self.checks.items():
-            check.setChecked(
-                self.backend.recommended_activity_filter.get(
-                    category,
-                    False,
-                )
-            )
-
-    def set_filter_value(self, category, enabled):
-        """Apply one filter change immediately to the live backend."""
-        self.backend.activity_filter[category] = bool(enabled)
-
-    def sync_filter(self):
-        """Synchronize visible checkbox values with the live backend."""
-        for category, check in self.checks.items():
-            self.backend.activity_filter[category] = check.isChecked()
 
 
 class MidiMonitorDialog(QDialog):
@@ -3564,14 +3298,6 @@ class PreferencesDialog(QDialog):
                 QStyle.StandardPixmap.SP_FileDialogDetailedView,
             ),
             (
-                "MIDI Filter",
-                lambda: MidiFilterPage(
-                    self.backend,
-                ),
-                "view-filter",
-                QStyle.StandardPixmap.SP_FileDialogContentsView,
-            ),
-            (
                 "Randomizer",
                 lambda: RandomizerPage(
                     self,
@@ -3695,8 +3421,6 @@ class PreferencesDialog(QDialog):
                 self.output_page = built_page
             elif label == "Layouts":
                 self.layouts_page = built_page
-            elif label == "MIDI Filter":
-                self.filter_page = built_page
             elif label == "Randomizer":
                 self.randomizer_page = built_page
             elif label == "Randomizer Behavior":
@@ -3878,7 +3602,6 @@ class PreferencesDialog(QDialog):
             self.selected_rnd_value_size,
         ) = self.display_page.values()
 
-        self.filter_page.sync_filter()
         self.refresh_timer.stop()
         self.accept()
 
@@ -6497,7 +6220,7 @@ class MidiRandomizeWindow(QMainWindow):
             wrapped_tooltip(
                 "Preferences\n"
                 "Opens the full Preferences panel: MIDI Input/Output, "
-                "Layouts, MIDI Filter, Randomizer, Randomization Behavior "
+                "Layouts, Randomizer, Randomization Behavior "
                 "and Display."
             )
         )
@@ -6732,6 +6455,12 @@ class MidiRandomizeWindow(QMainWindow):
                 control.set_compact_labels(compact)
             else:
                 control.set_caption(caption)
+                if attribute == "main_change_knob":
+                    control._formatter = (
+                        (lambda value: ("Unlim." if compact else "Unlimited")
+                         if value >= MIDI_MAX else f"±{value}")
+                    )
+                    control.set_value(control.value())
 
         if hasattr(self, "preset_label"):
             self.preset_label.setText("" if self.width() < 290 else "Preset:")
@@ -9715,12 +9444,6 @@ class MidiRandomizeWindow(QMainWindow):
         self.window_size = DEFAULT_SIZE
         self.window_width = DEFAULT_WINDOW_WIDTH
 
-        # Restore the recommended MIDI activity filter.
-        if hasattr(self.backend, "recommended_activity_filter"):
-            self.backend.activity_filter = dict(
-                self.backend.recommended_activity_filter
-            )
-
         if hasattr(self.backend, "set_debug_to_terminal"):
             self.backend.set_debug_to_terminal(False)
 
@@ -9805,9 +9528,6 @@ class MidiRandomizeWindow(QMainWindow):
             "  The timestamp-free event body is the intended RaySession "
             "integration format:\n"
             "  CH 8  A0  VEL 78 → 94\n\n"
-            "Preferences / MIDI Filter:\n"
-            "  Select which MIDI message types trigger visual activity. "
-            "This setting never blocks MIDI messages.\n\n"
             "Preferences / Randomizer Behavior:\n"
             "  Configure the VELOCITY randomization range, distribution, "
             "Bias, Max. Change, duplicate/recent-value behavior and timing controls.\n\n"
