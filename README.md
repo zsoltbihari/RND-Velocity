@@ -7,11 +7,9 @@
 - Graphical interface built with PySide6.
 - JACK MIDI input and output ports.
 - Configurable velocity range and randomization behavior, including distribution, bias, maximum change, interval shift, and width.
-- Preferences for MIDI activity filtering and display customization.
+- Preferences for display customization.
 - Optional terminal debug output and an in-app log panel.
 - Window layout and appearance options.
-
-The MIDI Filter preference controls which message types trigger visual activity; it does **not** block MIDI messages.
 
 ## Requirements
 
@@ -51,11 +49,9 @@ Az **RND Velocity** egy Linuxon futó, Python és PySide6 alapú MIDI-velocity-r
 - PySide6-alapú grafikus felület.
 - JACK MIDI-bemenet és -kimenet.
 - Beállítható velocity-tartomány és randomizálási viselkedés, többek között eloszlás, bias, maximális változás, intervallumeltolás és szélesség.
-- Beállítások a MIDI-aktivitás szűréséhez és a megjelenés testreszabásához.
+- A megjelenés testreszabásának lehetőségei.
 - Opcionális terminálos hibakeresési kimenet és beépített naplóablak.
 - Ablakelrendezési és megjelenési lehetőségek.
-
-A MIDI Filter beállítás azt szabályozza, hogy mely üzenettípusok váltsanak ki vizuális aktivitást; **nem blokkolja a MIDI-üzeneteket**.
 
 ## Követelmények
 
